@@ -3,7 +3,10 @@
 search() {
     local query
     local result
-    
+    local filtered_results
+    local title
+    local count
+
     read -rp "Enter title (enter nothing to exit): " query
     echo ""
     if [[ -z "$query" ]]; then
@@ -14,13 +17,70 @@ search() {
   		    --data-urlencode "api_key=$TMDB_API_KEY" \
 		    --data-urlencode "query=$query")
     fi
-    echo "$result" | jq -r '.results[] | select(.media_type == "movie" or .media_type == "tv")  | "\(.title // .name) (\((.release_date // .first_air_date // "")[:4])) - \(.media_type) - \(if .vote_count == 0 then "Unrated" else "\(.vote_average * 10 | round / 10)/10 - \(.vote_count) votes" end)"' | nl -ba
+    filtered_results=$(echo "$result" | jq '[.results[] | select(.media_type == "movie" or .media_type == "tv")]')
+    echo "$filtered_results" | jq -r '.[] | "\(.title // .name) (\((.release_date // .first_air_date // "")[:4])) - \(.media_type) - \(if .vote_count == 0 then "Unrated" else "\(.vote_average * 10 | round / 10)/10 - \(.vote_count) votes" end)"' | nl -ba
+    count=$(echo "$filtered_results" | jq 'length')
+    echo ""
+    read -rp "Select a title # (enter 0 to exit): " title
+    echo ""
+    if [[ "$title" == 0 ]]; then
+	    echo "Returning to main menu..."
+	    return
+    elif [[ ! "$title" =~ ^[1-9][0-9]*$ ]]; then
+	    echo "Invalid Selection"
+	    return
+    elif [[ "$title" -gt "$count" ]]; then
+	    echo "Invalid Selection"
+	    return
+    else
+	    selected=$(echo "$filtered_results" | jq --argjson i "$((title - 1))" '.[$i]')
+	    add_to_watchlist "$selected"
+    fi
 }
 
+add_to_watchlist() {
+	local selected="$1"
+	local entry=$(echo "$selected" | jq '{
+	id: .id,
+    	title: (.title // .name),
+	media_type: .media_type,
+	year: (.release_date // .first_air_date // "")[:4],
+	rating: .vote_average,
+	votes: .vote_count,
+	watched: false
+	}')
+	if jq --argjson new "$entry" '. + [$new]' data/watchlist.json > data/watchlist.tmp; then
+		if mv data/watchlist.tmp data/watchlist.json; then
+			echo "Successfully added to watchlist!"
+		else
+			echo "Failed to save watchlist. (mv failure)"
+		fi
+	else
+		echo "Failed to process watchlist. (jq failure)"
+	fi
+}
 
-
+view_watchlist() {
+	local count
+	count=$(jq 'length' data/watchlist.json)
+	if [[ "$count" -eq 0 ]]; then
+		echo "Your watchlist is empty!"
+	else
+		jq -r '.[] | "\(.title) (\(.year)) - \(.media_type) - \(if .votes == 0 then "Unrated" else "\(.rating * 10 | round / 10)/10 - \(.votes) votes" end) - \(if .watched then "Watched" else "Unwatched" end)"' data/watchlist.json | nl -ba
+		echo ""
+		echo "Total: $count"
+		echo ""
+		read -rp "Press Enter to return to the main menu."
+	fi
+}
 
 echo "Welcome to Watchlist!"
+
+
+if [[ ! -s "data/watchlist.json" ]]; then
+	echo "[]" > data/watchlist.json
+fi
+
 
 if [[ -f ".env" ]]; then
     echo "Config file exists"
@@ -99,7 +159,7 @@ EOF
 		search
 		;;
 	2)
-		echo "Option 2"
+		view_watchlist
 		;;
 	3)
 		echo "Goodbye!"
